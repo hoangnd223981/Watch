@@ -1,6 +1,6 @@
 // Service worker: lưu trang để mở được cả khi không có mạng (Bluetooth không cần mạng).
 // Có mạng thì luôn lấy bản mới nhất từ GitHub Pages, mất mạng mới dùng bản đã lưu.
-const CACHE = 'hrwatch-v1';
+const CACHE = 'hrwatch-v2';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES))); self.skipWaiting(); });
 self.addEventListener('activate', e => {
