@@ -160,6 +160,8 @@ input[type="number"], select {
 .rec-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--crit); display: none; }
 .recording .rec-dot { display: inline-block; animation: blink 1.2s infinite; }
 .help { font-size: 14px; color: var(--text-2); }
+#log { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--surface-2); color: var(--text);
+  border-radius: 10px; padding: 10px; margin: 10px 0; max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
 .help ol { padding-left: 20px; margin: 8px 0; }
 .help li { margin: 4px 0; }
 .toast {
@@ -274,6 +276,7 @@ input[type="number"], select {
       <dt>Giờ đồng hồ</dt><dd id="wTime">—</dd>
       <dt>Phần cứng</dt><dd id="wHw">—</dd>
       <dt>Đã chạy</dt><dd id="wUp">—</dd>
+      <dt>Máy đang kết nối</dt><dd id="wLinks">—</dd>
     </dl>
     <div class="row" style="margin-top:10px"><button id="btnTime">Đồng bộ giờ từ điện thoại</button></div>
     <h2 style="margin-top:18px">Thông tin người đeo <span class="sub" style="font-weight:400">(dùng tính calo)</span></h2>
@@ -301,8 +304,24 @@ input[type="number"], select {
         <li>Đặt ngón tay lên cảm biến. Sau ~2 s ổn định và ~5 s đo, nhịp tim và SpO₂ sẽ hiện.</li>
         <li>Giờ của đồng hồ tự đồng bộ theo điện thoại mỗi lần kết nối.</li>
       </ol>
-      <p>Mất kết nối (đi xa, đồng hồ khởi động lại) app tự kết nối lại. Muốn chạy như app thật: Chrome → menu ⋮ → <b>Thêm vào Màn hình chính</b>.</p>
+      <p>Mất kết nối (đi xa, đồng hồ khởi động lại) app tự kết nối lại. Đồng hồ nhận tối đa <b>2 máy cùng lúc</b>. Muốn chạy như app thật: Chrome → menu ⋮ → <b>Thêm vào Màn hình chính</b>.</p>
+      <p><b>iPhone không kết nối được?</b></p>
+      <ol>
+        <li>Nhìn màn đồng hồ: có biểu tượng Bluetooth tức là đang có máy khác kết nối. Nếu đã đủ 2 máy, đóng app trên một máy.</li>
+        <li>Cài đặt iPhone → <b>Bluefy</b> → bật <b>Bluetooth</b> (lần đầu Bluefy hỏi quyền, nếu lỡ bấm Không thì phải bật ở đây).</li>
+        <li>Báo lỗi <i>No Services matching UUID</i>: iPhone còn nhớ cấu trúc Bluetooth cũ của ESP32 (từ code nạp trước). Tắt Bluetooth trong Cài đặt rồi bật lại, hoặc khởi động lại iPhone.</li>
+        <li>Danh sách trống: bấm <b>Quét tất cả thiết bị</b> ở dưới rồi chọn HR-Watch (hoặc tên ESP32 lạ).</li>
+        <li>Vẫn lỗi: mở <b>Nhật ký kết nối</b>, bấm Sao chép và gửi lại để xem lỗi ở bước nào.</li>
+      </ol>
       <p class="muted">Giá trị SpO₂ dùng công thức thử nghiệm 110 − 25·R, chưa hiệu chuẩn — không dùng cho chẩn đoán y tế.</p>
+    </details>
+  </section>
+
+  <section class="card help">
+    <details id="logBox">
+      <summary><h2>Nhật ký kết nối</h2><span class="sub" id="logCount"></span><span class="chev">›</span></summary>
+      <pre id="log"></pre>
+      <div class="row"><button id="btnCopyLog">Sao chép</button><button id="btnScanAll">Quét tất cả thiết bị</button></div>
     </details>
   </section>
 </div>
@@ -350,7 +369,8 @@ function decInfo(d) {
   if (d.byteLength < 17) return null;
   const hw = d.getUint8(7);
   return { ver: d.getUint8(0), age: d.getUint8(1), height: d.getUint16(2, true), weight: d.getUint16(4, true), male: d.getUint8(6) === 1,
-    bno: !!(hw & 1), oled: !!(hw & 2), clock: !!(hw & 4), wifi: !!(hw & 8), epoch: d.getUint32(8, true), uptime: d.getUint32(12, true), step: d.getUint8(16) };
+    bno: !!(hw & 1), oled: !!(hw & 2), clock: !!(hw & 4), wifi: !!(hw & 8), epoch: d.getUint32(8, true), uptime: d.getUint32(12, true), step: d.getUint8(16),
+    links: d.byteLength > 17 ? d.getUint8(17) : 0 };
 }
 const cmdTime = () => { const t = Math.floor(Date.now() / 1000); return [1, t & 255, (t >>> 8) & 255, (t >>> 16) & 255, t >>> 24]; };
 const cmdProfile = (age, h, w, male) => [2, age, h & 255, h >> 8, w & 255, w >> 8, male ? 1 : 0];
@@ -393,13 +413,14 @@ function setMode(mode, text) {
 const link = {
   device: null, chars: {}, user: false, retry: 0, timer: null, q: Promise.resolve(),
 
-  async choose() {
-    const device = await navigator.bluetooth.requestDevice({
-      filters: [{ services: [UUID.svc] }, { namePrefix: 'HR-Watch' }],
-      optionalServices: [UUID.svc],
-    });
+  async choose(all) {
+    log(all ? 'Mở danh sách: tất cả thiết bị' : 'Mở danh sách: lọc theo service HR-Watch');
+    const device = await navigator.bluetooth.requestDevice(all
+      ? { acceptAllDevices: true, optionalServices: [UUID.svc] }
+      : { filters: [{ services: [UUID.svc] }, { namePrefix: 'HR-Watch' }], optionalServices: [UUID.svc] });
+    log('Đã chọn: ' + (device.name || '(không tên)') + ' id=' + (device.id || '?'));
     this.device = device;
-    device.addEventListener('gattserverdisconnected', () => this.onDisconnected());
+    device.addEventListener('gattserverdisconnected', () => { if (this.device === device) this.onDisconnected(); });
     this.user = false; this.retry = 0;
     $('devName').textContent = device.name || '';
     await this.open();
@@ -407,29 +428,44 @@ const link = {
 
   async open() {
     setMode(this.retry ? 'reconnecting' : 'connecting');
-    const server = await this.device.gatt.connect();
+    const step = async (name, fn) => {                      // mỗi bước ghi nhật ký; lỗi ghi rõ bước nào
+      try { const r = await fn(); log(name + ': OK'); return r; }
+      catch (e) { log(name + ': LỖI ' + errText(e)); e.step = name; throw e; }
+    };
+    const server = await step('Kết nối GATT', () => this.device.gatt.connect());
     if (this.user) { this.device.gatt.disconnect(); return; }   // người dùng đã bấm Ngắt trong lúc chờ
-    const svc = await server.getPrimaryService(UUID.svc);
-    for (const k of ['vitals', 'act', 'wave', 'info', 'ctrl']) this.chars[k] = await svc.getCharacteristic(UUID[k]);
+    let svc;
+    try { svc = await step('Tìm service', () => server.getPrimaryService(UUID.svc)); }
+    catch (e) {                                             // iPhone đôi khi chưa dò xong dịch vụ: thử lại 1 lần
+      await new Promise(r => setTimeout(r, 800));
+      if (!this.device.gatt.connected) await step('Kết nối lại GATT', () => this.device.gatt.connect());
+      svc = await step('Tìm service (lần 2)', () => this.device.gatt.getPrimaryService(UUID.svc));
+    }
+    for (const k of ['vitals', 'act', 'wave', 'info', 'ctrl'])
+      this.chars[k] = await step('Characteristic ' + k, () => svc.getCharacteristic(UUID[k]));
     const handlers = { vitals: onVitals, act: onAct, wave: onWave, info: onInfo };
     for (const k of Object.keys(handlers)) {               // tuần tự: Android không cho 2 thao tác GATT cùng lúc
       this.chars[k].addEventListener('characteristicvaluechanged', handlers[k]);
-      await this.chars[k].startNotifications();
+      await step('Bật notify ' + k, () => this.chars[k].startNotifications());
     }
-    try { handleInfo(await this.chars.info.readValue()); } catch (e) { /* không bắt buộc */ }
+    try { handleInfo(await this.chars.info.readValue()); } catch (e) { log('Đọc info: bỏ qua (' + errText(e) + ')'); }
     this.retry = 0;
     S.waveSeq = -1;
     setMode('connected');
-    await this.write(cmdTime());                            // đồng hồ lấy giờ của điện thoại
+    log('Đã kết nối');
+    try { await this.write(cmdTime()); log('Gửi giờ: OK'); }  // lỗi ở đây không làm rớt kết nối
+    catch (e) { log('Gửi giờ: LỖI ' + errText(e)); }
   },
 
   onDisconnected() {
     this.chars = {};
+    log(this.user ? 'Đã ngắt (người dùng)' : 'Mất kết nối');
     if (this.user || !this.device) { setMode('idle'); return; }
     setMode('reconnecting');
     const delay = Math.min(10, 2 ** Math.min(this.retry, 4)) * 1000;
     this.retry++;
     clearTimeout(this.timer);
+    log('Thử kết nối lại sau ' + delay / 1000 + ' s');
     this.timer = setTimeout(() => this.open().catch(() => this.onDisconnected()), delay);
   },
 
@@ -564,6 +600,7 @@ function renderWatch() {
   } else $('wTime').textContent = 'chưa có giờ';
   $('wHw').textContent = (i.bno ? 'BNO055 ✓' : 'BNO055 ✗') + ' · ' + (i.oled ? 'OLED ✓' : 'OLED ✗');
   $('wUp').textContent = fmtUptime(i.uptime) + ' · TEST_STEP ' + i.step;
+  $('wLinks').textContent = i.links ? i.links + ' / 2' : '—';
   if (!S.profileDirty) {
     $('pAge').value = i.age; $('pH').value = i.height; $('pW').value = i.weight; $('pSex').value = i.male ? '1' : '0';
   }
@@ -876,12 +913,50 @@ $('btnConnect').addEventListener('click', async () => {
   if (S.mode === 'demo') { $('demoOn').checked = false; demo.stop(); return; }
   if (S.mode !== 'idle') { link.disconnect(); return; }
   if (!navigator.bluetooth) { showNoBle(true); return; }
-  try { await link.choose(); }
+  connectFlow(false);
+});
+$('btnScanAll').addEventListener('click', () => {
+  if (!navigator.bluetooth) { showNoBle(true); return; }
+  if (S.mode === 'demo') { $('demoOn').checked = false; demo.stop(); }
+  if (S.mode !== 'idle') link.disconnect();
+  connectFlow(true);
+});
+async function connectFlow(all) {
+  try { await link.choose(all); }
   catch (e) {
-    if (e && e.name === 'NotFoundError') { setMode('idle'); return; }    // người dùng đóng hộp chọn
+    log('Thất bại: ' + errText(e));
+    link.user = true; clearTimeout(link.timer);              // lần kết nối đầu lỗi: không tự thử lại
+    if (link.device && link.device.gatt.connected) link.device.gatt.disconnect();
     setMode('idle');
-    toast('Không kết nối được: ' + (e && e.message || e), 4000);
+    const m = (e && e.message) || '';
+    if (e && e.name === 'NotFoundError' && /cancel|hủy|huỷ/i.test(m)) return;        // người dùng đóng hộp chọn
+    toast(hintFor(e), 7000);
   }
+}
+function errText(e) { return e ? ((e.name || 'Error') + ': ' + (e.message || e)) : '?'; }
+function hintFor(e) {
+  const m = (e && e.message) || '', n = (e && e.name) || '';
+  if (/No Services matching|No Characteristics matching/i.test(m))
+    return 'Điện thoại còn nhớ cấu trúc Bluetooth cũ của ESP32. Tắt Bluetooth rồi bật lại (iPhone: hoặc khởi động lại máy), rồi kết nối lại.';
+  if (n === 'NotFoundError') return 'Không tìm thấy đồng hồ (' + m + '). Kiểm tra Bluetooth đã bật và quyền Bluetooth của trình duyệt; xem Hướng dẫn kết nối.';
+  if (n === 'SecurityError') return 'Trình duyệt chặn Bluetooth: cần mở trang qua https và bấm nút trực tiếp.';
+  if (n === 'NetworkError' || /GATT|disconnect|connect/i.test(m))
+    return 'Không kết nối được (' + m + '). Đồng hồ có thể đã có đủ 2 máy kết nối hoặc ở xa — thử lại.';
+  return 'Không kết nối được: ' + (m || e);
+}
+// ---------- nhật ký kết nối ----------
+const LOG = [];
+function log(msg) {
+  const d = new Date(), z = n => String(n).padStart(2, '0');
+  LOG.push(`${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, '0')}  ${msg}`);
+  if (LOG.length > 300) LOG.shift();
+  const el = $('log'); el.textContent = LOG.join('\n'); el.scrollTop = el.scrollHeight;
+  $('logCount').textContent = '· ' + LOG.length + ' dòng';
+}
+$('btnCopyLog').addEventListener('click', async () => {
+  const text = LOG.join('\n');
+  try { await navigator.clipboard.writeText(text); toast('Đã sao chép nhật ký'); }
+  catch (e) { const r = document.createRange(); r.selectNodeContents($('log')); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); toast('Bấm giữ để sao chép phần đã chọn'); }
 });
 function showNoBle(force) {
   const b = $('noBle'), ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
@@ -898,6 +973,8 @@ function onTheme() { readColors(); renderTrends(); }
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', onTheme);
 addEventListener('resize', () => renderTrends());
 readColors(); showNoBle(false); setMode('idle'); renderHero(); renderTrends(); renderRec();
+log('Trình duyệt: ' + navigator.userAgent);
+log('Web Bluetooth: ' + (navigator.bluetooth ? 'có' : 'KHÔNG') + ' · https: ' + (window.isSecureContext ? 'có' : 'KHÔNG'));
 requestAnimationFrame(frame);
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
