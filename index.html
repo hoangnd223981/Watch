@@ -1,0 +1,905 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HR-Watch</title>
+<meta name="description" content="Theo dõi nhịp tim, SpO2, số bước và calo từ đồng hồ ESP32 qua Bluetooth">
+<meta name="theme-color" content="#f4f3ef" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111110" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f4f3ef; --surface: #fcfcfb; --surface-2: #efeee9; --border: #e2e0d9;
+  --text: #0b0b0b; --text-2: #52514e; --muted: #7d7b75; --grid: #e6e4de;
+  --hr: #e34948; --spo2: #2a78d6; --accent: #2a78d6; --accent-ink: #ffffff;
+  --good: #0ca30c; --warn: #fab219; --serious: #ec835a; --crit: #d03b3b;
+  --shadow: 0 1px 2px rgba(20, 18, 10, .05);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #111110; --surface: #1a1a19; --surface-2: #242422; --border: #2f2f2c;
+    --text: #f0efec; --text-2: #c3c2b7; --muted: #8f8e86; --grid: #2b2b28;
+    --hr: #e66767; --spo2: #3987e5; --accent: #3987e5; --accent-ink: #ffffff;
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111110; --surface: #1a1a19; --surface-2: #242422; --border: #2f2f2c;
+  --text: #f0efec; --text-2: #c3c2b7; --muted: #8f8e86; --grid: #2b2b28;
+  --hr: #e66767; --spo2: #3987e5; --accent: #3987e5; --accent-ink: #ffffff;
+  --shadow: none;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+.num { font-variant-numeric: tabular-nums; }
+.wrap { max-width: 560px; margin: 0 auto; padding: 0 16px calc(28px + env(safe-area-inset-bottom)); }
+
+/* ---------- header ---------- */
+header {
+  position: sticky; top: 0; z-index: 10; background: var(--bg);
+  padding: calc(10px + env(safe-area-inset-top)) 0 10px;
+  display: flex; align-items: center; gap: 10px;
+}
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 17px; letter-spacing: -.01em; white-space: nowrap; }
+.brand svg { width: 26px; height: 26px; }
+.pill {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+  background: var(--surface-2); color: var(--text-2); font-size: 12.5px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 46vw;
+}
+.pill i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.pill[data-mode="connected"] i, .pill[data-mode="demo"] i { background: var(--good); }
+.pill[data-mode="connecting"] i, .pill[data-mode="reconnecting"] i { background: var(--warn); animation: blink 1s infinite; }
+@keyframes blink { 50% { opacity: .25; } }
+.grow { flex: 1; }
+button, .btn {
+  font: inherit; font-weight: 600; font-size: 14px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); padding: 9px 14px; cursor: pointer; min-height: 40px;
+}
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+button:disabled { opacity: .45; cursor: default; }
+button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- cards ---------- */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-top: 12px; box-shadow: var(--shadow); }
+.card h2 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -.005em; }
+.card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.sub { color: var(--text-2); font-size: 13px; }
+.muted { color: var(--muted); }
+.banner { border-radius: 14px; padding: 14px 16px; margin-top: 12px; background: var(--surface-2); border: 1px solid var(--border); font-size: 14px; }
+.banner b { display: block; margin-bottom: 4px; }
+.banner a { color: var(--accent); }
+
+/* ---------- hero ---------- */
+.status { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14.5px; min-height: 22px; }
+.status svg { width: 18px; height: 18px; flex: none; }
+.vitals { display: grid; grid-template-columns: 1fr 1fr; margin-top: 12px; }
+.vital { padding: 2px 0; }
+.vital + .vital { border-left: 1px solid var(--border); padding-left: 16px; }
+.vlabel { display: flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 13px; }
+.vlabel svg { width: 15px; height: 15px; }
+.vnum { font-size: clamp(50px, 17vw, 76px); font-weight: 650; line-height: 1.02; letter-spacing: -.03em; margin-top: 2px; }
+.vnum .na { color: var(--muted); font-weight: 500; letter-spacing: -.02em; font-variant-numeric: normal; font-feature-settings: "tnum" 0; }
+.vnum small { font-size: 15px; font-weight: 500; letter-spacing: 0; color: var(--text-2); margin-left: 4px; }
+.vnote { font-size: 12.5px; color: var(--muted); min-height: 18px; }
+.stale .vnum { opacity: .4; }
+#heartIcon { transform-origin: 50% 55%; }
+#heartIcon.beat { animation: beat .35s ease-out; }
+@keyframes beat { 0% { transform: scale(1); } 30% { transform: scale(1.35); } 100% { transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { #heartIcon.beat { animation: none; } .pill i { animation: none !important; } }
+
+/* ---------- charts ---------- */
+.chart { position: relative; }
+.chart canvas { display: block; width: 100%; touch-action: pan-y; }
+#wave { height: 128px; }
+#hrChart { height: 150px; }
+#spChart { height: 110px; }
+.overlay {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 13.5px; pointer-events: none; text-align: center; padding: 0 20px;
+}
+.tip {
+  position: absolute; top: 4px; pointer-events: none; background: var(--text); color: var(--bg);
+  font-size: 12.5px; padding: 4px 8px; border-radius: 8px; white-space: nowrap; transform: translateX(-50%);
+  display: none; font-variant-numeric: tabular-nums;
+}
+.seg { display: inline-flex; background: var(--surface-2); border-radius: 10px; padding: 3px; gap: 2px; }
+.seg button { border: 0; background: transparent; min-height: 30px; padding: 4px 10px; font-size: 13px; font-weight: 600; color: var(--text-2); border-radius: 8px; }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.clabel { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); margin: 6px 0 4px; }
+.clabel i { width: 10px; height: 3px; border-radius: 2px; display: inline-block; }
+
+/* ---------- tiles ---------- */
+.big { display: flex; align-items: baseline; gap: 8px; }
+.big .n { font-size: 44px; font-weight: 650; letter-spacing: -.02em; line-height: 1.05; }
+.tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 12px; }
+.tile { background: var(--surface-2); border-radius: 12px; padding: 10px 12px; }
+.tile .t { font-size: 12.5px; color: var(--text-2); }
+.tile .v { font-size: 22px; font-weight: 650; letter-spacing: -.01em; margin-top: 1px; }
+.tile .v small { font-size: 13px; font-weight: 500; color: var(--text-2); margin-left: 3px; }
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.row.sp { justify-content: space-between; }
+
+/* ---------- details / chips ---------- */
+details > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary .chev { margin-left: auto; transition: transform .2s; color: var(--muted); }
+details[open] > summary .chev { transform: rotate(90deg); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.chip { font-size: 12.5px; padding: 3px 9px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
+.chip.ok { color: var(--text); }
+.chip.ok::before { content: "✓ "; color: var(--good); font-weight: 700; }
+.chip.bad::before { content: "! "; color: var(--serious); font-weight: 700; }
+.kv { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; font-size: 14px; margin-top: 10px; }
+.kv dt { color: var(--text-2); }
+.kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* ---------- forms ---------- */
+.form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+label.f { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-2); }
+input[type="number"], select {
+  font: inherit; font-size: 16px; color: var(--text); background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 8px 10px; min-height: 42px; width: 100%;
+}
+.switch { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; }
+.switch input { appearance: none; -webkit-appearance: none; width: 44px; height: 26px; border-radius: 999px; background: var(--border); position: relative; margin: 0; flex: none; cursor: pointer; transition: background .15s; }
+.switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: left .15s; }
+.switch input:checked { background: var(--accent); }
+.switch input:checked::after { left: 21px; }
+.rec-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--crit); display: none; }
+.recording .rec-dot { display: inline-block; animation: blink 1.2s infinite; }
+.help { font-size: 14px; color: var(--text-2); }
+.help ol { padding-left: 20px; margin: 8px 0; }
+.help li { margin: 4px 0; }
+.toast {
+  position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(20px);
+  background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 14px; opacity: 0;
+  transition: opacity .2s, transform .2s; pointer-events: none; max-width: calc(100% - 32px); z-index: 20;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="var(--hr)"/><path d="M16 24.5s-7.5-4.6-7.5-10a4.3 4.3 0 0 1 7.5-2.8 4.3 4.3 0 0 1 7.5 2.8c0 5.4-7.5 10-7.5 10z" fill="#fff"/></svg>
+      HR-Watch
+    </div>
+    <span class="pill" id="pill" data-mode="idle" role="status"><i></i><span id="pillText">Chưa kết nối</span></span>
+    <span class="grow"></span>
+    <button class="primary" id="btnConnect">Kết nối</button>
+  </header>
+
+  <div class="banner" id="noBle" hidden></div>
+
+  <!-- ===== Chỉ số chính ===== -->
+  <section class="card" id="hero" aria-label="Nhịp tim và SpO2">
+    <div class="status" aria-live="polite"><span id="stIcon"></span><span id="stText">Chưa kết nối đồng hồ</span></div>
+    <div class="vitals">
+      <div class="vital">
+        <div class="vlabel"><svg viewBox="0 0 24 24" id="heartIcon" aria-hidden="true"><path fill="var(--hr)" d="M12 21s-8.5-5.2-8.5-11.3A4.9 4.9 0 0 1 12 6.6a4.9 4.9 0 0 1 8.5 3.1C20.5 15.8 12 21 12 21z"/></svg>Nhịp tim</div>
+        <div class="vnum num" id="hrVal"><span class="na">--</span><small>bpm</small></div>
+        <div class="vnote" id="hrNote"></div>
+      </div>
+      <div class="vital">
+        <div class="vlabel"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="var(--spo2)" d="M12 2.8c-.3 0-.5.1-.7.3C9.6 5.2 5.5 10.6 5.5 14.4a6.5 6.5 0 0 0 13 0c0-3.8-4.1-9.2-5.8-11.3a.9.9 0 0 0-.7-.3z"/></svg>SpO₂</div>
+        <div class="vnum num" id="spVal"><span class="na">--</span><small>%</small></div>
+        <div class="vnote" id="spNote"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Sóng PPG ===== -->
+  <section class="card" aria-label="Sóng mạch">
+    <div class="card-head"><h2>Sóng mạch (PPG)</h2><span class="grow"></span><span class="sub" id="waveInfo">25 Hz</span></div>
+    <div class="chart"><canvas id="wave" aria-label="Sóng PPG thời gian thực"></canvas><div class="overlay" id="waveOverlay">Kết nối đồng hồ để xem sóng mạch</div></div>
+  </section>
+
+  <!-- ===== Xu hướng ===== -->
+  <section class="card" aria-label="Xu hướng">
+    <div class="card-head">
+      <h2>Xu hướng</h2><span class="grow"></span>
+      <div class="seg" role="group" aria-label="Khoảng thời gian">
+        <button data-range="120" aria-pressed="false">2 phút</button>
+        <button data-range="600" aria-pressed="true">10 phút</button>
+        <button data-range="1800" aria-pressed="false">30 phút</button>
+      </div>
+    </div>
+    <div class="clabel"><i style="background:var(--hr)"></i>Nhịp tim (bpm)</div>
+    <div class="chart" data-key="hr"><canvas id="hrChart" aria-label="Biểu đồ nhịp tim"></canvas><div class="tip"></div><div class="overlay" id="hrEmpty">Chưa có dữ liệu</div></div>
+    <div class="clabel"><i style="background:var(--spo2)"></i>SpO₂ (%)</div>
+    <div class="chart" data-key="spo2"><canvas id="spChart" aria-label="Biểu đồ SpO2"></canvas><div class="tip"></div><div class="overlay" id="spEmpty">Chưa có dữ liệu</div></div>
+  </section>
+
+  <!-- ===== Hoạt động ===== -->
+  <section class="card" aria-label="Hoạt động">
+    <div class="card-head"><h2>Hoạt động hôm nay</h2><span class="grow"></span><span class="sub" id="walkState"></span></div>
+    <div class="big"><span class="n num" id="steps">—</span><span class="sub">bước</span></div>
+    <div class="tiles">
+      <div class="tile"><div class="t">Quãng đường</div><div class="v num" id="dist">—<small>km</small></div></div>
+      <div class="tile"><div class="t">Nhịp bước</div><div class="v num" id="cad">—<small>bước/phút</small></div></div>
+      <div class="tile"><div class="t">Calo tổng</div><div class="v num" id="kcal">—<small>kcal</small></div></div>
+      <div class="tile"><div class="t">Calo vận động</div><div class="v num" id="active">—<small>kcal</small></div></div>
+      <div class="tile"><div class="t">Đang tiêu hao</div><div class="v num" id="kpm">—<small>kcal/phút</small></div></div>
+      <div class="tile"><div class="t">Tính calo theo</div><div class="v" id="src" style="font-size:16px">—</div></div>
+    </div>
+    <div class="row" style="margin-top:12px"><button id="btnReset">Đặt lại bước và calo</button></div>
+  </section>
+
+  <!-- ===== Chất lượng tín hiệu ===== -->
+  <section class="card">
+    <details id="sigDetails">
+      <summary><h2>Chất lượng tín hiệu</h2><span class="sub" id="sigSummary"></span><span class="chev">›</span></summary>
+      <dl class="kv">
+        <dt>Chỉ số tưới máu PI</dt><dd id="kPi">—</dd>
+        <dt>Tỉ số R (đỏ/hồng ngoại)</dt><dd id="kR">—</dd>
+        <dt>Mức chuyển động</dt><dd id="kAcc">—</dd>
+        <dt>Mẫu bị mất (từ lúc bật)</dt><dd id="kLost">—</dd>
+        <dt>Gói sóng nhận / mất</dt><dd id="kPkt">—</dd>
+      </dl>
+      <div class="clabel" style="margin-top:12px">Cờ nhịp tim</div><div class="chips" id="hrChips"></div>
+      <div class="clabel" style="margin-top:10px">Cờ SpO₂</div><div class="chips" id="spChips"></div>
+    </details>
+  </section>
+
+  <!-- ===== Ghi dữ liệu ===== -->
+  <section class="card" id="recCard">
+    <div class="card-head"><h2>Ghi dữ liệu</h2><span class="rec-dot"></span><span class="grow"></span>
+      <label class="switch"><input type="checkbox" id="recOn" aria-label="Bật ghi dữ liệu"></label></div>
+    <div class="sub" id="recInfo">Mỗi giây 1 dòng: HR, SpO₂, R, PI, cờ chất lượng, bước, calo. Tải về dạng CSV mở bằng Excel / Google Sheets.</div>
+    <div class="form">
+      <label class="f">SpO₂ máy tham chiếu (%)<input type="number" id="refSpo2" inputmode="decimal" min="50" max="100" step="1" placeholder="vd. 98"></label>
+      <div class="sub" style="align-self:end;padding-bottom:4px">Nhập số đọc từ máy kẹp tay chuẩn để hiệu chuẩn công thức SpO₂ = f(R).</div>
+    </div>
+    <div class="row" style="margin-top:12px"><button id="btnCsv" disabled>Tải CSV</button><button id="btnClear" disabled>Xóa</button></div>
+  </section>
+
+  <!-- ===== Đồng hồ ===== -->
+  <section class="card">
+    <div class="card-head"><h2>Đồng hồ</h2><span class="grow"></span><span class="sub" id="devName"></span></div>
+    <dl class="kv" style="margin-top:0">
+      <dt>Giờ đồng hồ</dt><dd id="wTime">—</dd>
+      <dt>Phần cứng</dt><dd id="wHw">—</dd>
+      <dt>Đã chạy</dt><dd id="wUp">—</dd>
+    </dl>
+    <div class="row" style="margin-top:10px"><button id="btnTime">Đồng bộ giờ từ điện thoại</button></div>
+    <h2 style="margin-top:18px">Thông tin người đeo <span class="sub" style="font-weight:400">(dùng tính calo)</span></h2>
+    <form class="form" id="profile" autocomplete="off">
+      <label class="f">Tuổi<input type="number" id="pAge" inputmode="numeric" min="10" max="99" required></label>
+      <label class="f">Giới tính<select id="pSex"><option value="1">Nam</option><option value="0">Nữ</option></select></label>
+      <label class="f">Chiều cao (cm)<input type="number" id="pH" inputmode="numeric" min="100" max="220" required></label>
+      <label class="f">Cân nặng (kg)<input type="number" id="pW" inputmode="numeric" min="25" max="200" required></label>
+      <button class="primary" type="submit" id="btnProfile" style="grid-column:1/-1">Lưu vào đồng hồ</button>
+    </form>
+    <div style="margin-top:16px;display:grid;gap:12px">
+      <label class="switch"><input type="checkbox" id="wakeOn">Giữ màn hình điện thoại luôn sáng</label>
+      <label class="switch"><input type="checkbox" id="demoOn">Chế độ demo (dữ liệu giả, không cần đồng hồ)</label>
+    </div>
+  </section>
+
+  <!-- ===== Hướng dẫn ===== -->
+  <section class="card help">
+    <details>
+      <summary><h2>Hướng dẫn kết nối</h2><span class="chev">›</span></summary>
+      <ol>
+        <li>Bật Bluetooth trên điện thoại. Android cần bật cả <b>Vị trí</b> để quét Bluetooth.</li>
+        <li><b>Android</b>: mở trang này bằng <b>Chrome</b>. <b>iPhone</b>: cài app <b>Bluefy</b> rồi mở trang trong Bluefy (Safari không hỗ trợ Bluetooth cho web).</li>
+        <li>Bấm <b>Kết nối</b>, chọn <b>HR-Watch</b> trong danh sách.</li>
+        <li>Đặt ngón tay lên cảm biến. Sau ~2 s ổn định và ~5 s đo, nhịp tim và SpO₂ sẽ hiện.</li>
+        <li>Giờ của đồng hồ tự đồng bộ theo điện thoại mỗi lần kết nối.</li>
+      </ol>
+      <p>Mất kết nối (đi xa, đồng hồ khởi động lại) app tự kết nối lại. Muốn chạy như app thật: Chrome → menu ⋮ → <b>Thêm vào Màn hình chính</b>.</p>
+      <p class="muted">Giá trị SpO₂ dùng công thức thử nghiệm 110 − 25·R, chưa hiệu chuẩn — không dùng cho chẩn đoán y tế.</p>
+    </details>
+  </section>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+'use strict';
+// =====================================================================================
+//  Giao thức BLE — khớp với Phone.ino (mọi gói <= 20 byte, little-endian)
+// =====================================================================================
+const U = s => '6dd6' + s + '-cc19-41f4-9b81-82973e9935b7';
+const UUID = { svc: U('0001'), vitals: U('0002'), act: U('0003'), wave: U('0004'), info: U('0005'), ctrl: U('0006') };
+const SQI = [
+  [0x0001, 'Không có ngón tay'], [0x0002, 'Chưa đủ dữ liệu'], [0x0004, 'Bão hòa (ấn quá mạnh)'],
+  [0x0008, 'Tín hiệu yếu'], [0x0010, 'Chuyển động'], [0x0020, 'Tay xê dịch'],
+  [0x0040, 'Đỏ – hồng ngoại lệch'], [0x0080, 'Nhịp không đều'], [0x0100, 'Mất nhịp'],
+  [0x0200, 'HR ngoài dải'], [0x0400, 'R ngoài dải'], [0x0800, 'Chờ HR hợp lệ'],
+  [0x1000, 'Mất mẫu'], [0x2000, 'Đang bắt nhịp khi chạy'], [0x4000, 'HR không khớp phổ'],
+];
+const SQI_KEY = { 0x0001: 'NO_FINGER', 0x0002: 'NOT_READY', 0x0004: 'SATURATED', 0x0008: 'LOW_AC', 0x0010: 'MOTION',
+  0x0020: 'DC_DRIFT', 0x0040: 'LOW_CORR', 0x0080: 'IRREGULAR', 0x0100: 'NO_BEAT', 0x0200: 'HR_RANGE', 0x0400: 'R_RANGE',
+  0x0800: 'HR_INVALID', 0x1000: 'DATA_GAP', 0x2000: 'TRACKING', 0x4000: 'HR_MISMATCH' };
+const KCAL_SRC = ['Nghỉ (BMR)', 'Số bước', 'Nhịp tim'];
+
+function decVitals(d) {
+  if (d.byteLength < 19) return null;
+  const b = d.getUint8(2);
+  return { seq: d.getUint8(0), state: d.getUint8(1), hrValid: !!(b & 1), spo2Valid: !!(b & 2), running: !!(b & 4), hrMotion: !!(b & 8),
+    hr: d.getUint16(3, true) / 10, spo2: d.getUint16(5, true) / 10, pi: d.getUint16(7, true) / 1e4,
+    hrFlags: d.getUint16(9, true), spo2Flags: d.getUint16(11, true), R: d.getUint16(13, true) / 1000,
+    acc: d.getUint16(15, true) / 100, lost: d.getUint16(17, true) };
+}
+function decAct(d) {
+  if (d.byteLength < 18) return null;
+  return { steps: d.getUint32(0, true), distM: d.getUint32(4, true), kcal: d.getUint16(8, true), active: d.getUint16(10, true) / 10,
+    kpm: d.getUint16(12, true) / 100, cad: d.getUint16(14, true) / 10, src: d.getUint8(16), walking: !!(d.getUint8(17) & 1) };
+}
+function decWave(d) {
+  if (d.byteLength < 6) return null;
+  const s = [];
+  for (let k = 4; k + 1 < d.byteLength; k += 2) s.push(d.getInt16(k, true));
+  return { seq: d.getUint8(0), state: d.getUint8(1), mask: d.getUint8(2), s };
+}
+function decInfo(d) {
+  if (d.byteLength < 17) return null;
+  const hw = d.getUint8(7);
+  return { ver: d.getUint8(0), age: d.getUint8(1), height: d.getUint16(2, true), weight: d.getUint16(4, true), male: d.getUint8(6) === 1,
+    bno: !!(hw & 1), oled: !!(hw & 2), clock: !!(hw & 4), wifi: !!(hw & 8), epoch: d.getUint32(8, true), uptime: d.getUint32(12, true), step: d.getUint8(16) };
+}
+const cmdTime = () => { const t = Math.floor(Date.now() / 1000); return [1, t & 255, (t >>> 8) & 255, (t >>> 16) & 255, t >>> 24]; };
+const cmdProfile = (age, h, w, male) => [2, age, h & 255, h >> 8, w & 255, w >> 8, male ? 1 : 0];
+const cmdReset = () => [3];
+
+// =====================================================================================
+//  Trạng thái
+// =====================================================================================
+const $ = id => document.getElementById(id);
+const S = {
+  v: null, a: null, info: null, vAt: 0, infoAt: 0, mode: 'idle',
+  hist: [],                  // {t, hr|null, spo2|null} mỗi giây, giữ 60 phút
+  range: 600,
+  wavePkts: 0, waveLost: 0, waveSeq: -1,
+  rec: [], recOn: false, recStart: 0,
+  profileDirty: false,
+};
+const HIST_MAX = 3600;
+
+function toast(msg, ms = 2600) {
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), ms);
+}
+function setMode(mode, text) {
+  S.mode = mode;
+  const p = $('pill'); p.dataset.mode = mode;
+  $('pillText').textContent = text || { idle: 'Chưa kết nối', connecting: 'Đang kết nối…', connected: 'Đã kết nối',
+    reconnecting: 'Mất kết nối – đang thử lại…', demo: 'Demo' }[mode];
+  const live = mode === 'connected' || mode === 'demo';
+  $('btnConnect').textContent = (mode === 'idle') ? 'Kết nối' : 'Ngắt';
+  for (const id of ['btnTime', 'btnProfile', 'btnReset']) $(id).disabled = !live;
+  if (!live) { S.v = null; renderHero(); }
+  updateWaveOverlay();
+  wake.update();
+}
+
+// =====================================================================================
+//  Bluetooth
+// =====================================================================================
+const link = {
+  device: null, chars: {}, user: false, retry: 0, timer: null, q: Promise.resolve(),
+
+  async choose() {
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [UUID.svc] }, { namePrefix: 'HR-Watch' }],
+      optionalServices: [UUID.svc],
+    });
+    this.device = device;
+    device.addEventListener('gattserverdisconnected', () => this.onDisconnected());
+    this.user = false; this.retry = 0;
+    $('devName').textContent = device.name || '';
+    await this.open();
+  },
+
+  async open() {
+    setMode(this.retry ? 'reconnecting' : 'connecting');
+    const server = await this.device.gatt.connect();
+    if (this.user) { this.device.gatt.disconnect(); return; }   // người dùng đã bấm Ngắt trong lúc chờ
+    const svc = await server.getPrimaryService(UUID.svc);
+    for (const k of ['vitals', 'act', 'wave', 'info', 'ctrl']) this.chars[k] = await svc.getCharacteristic(UUID[k]);
+    const handlers = { vitals: onVitals, act: onAct, wave: onWave, info: onInfo };
+    for (const k of Object.keys(handlers)) {               // tuần tự: Android không cho 2 thao tác GATT cùng lúc
+      this.chars[k].addEventListener('characteristicvaluechanged', handlers[k]);
+      await this.chars[k].startNotifications();
+    }
+    try { handleInfo(await this.chars.info.readValue()); } catch (e) { /* không bắt buộc */ }
+    this.retry = 0;
+    S.waveSeq = -1;
+    setMode('connected');
+    await this.write(cmdTime());                            // đồng hồ lấy giờ của điện thoại
+  },
+
+  onDisconnected() {
+    this.chars = {};
+    if (this.user || !this.device) { setMode('idle'); return; }
+    setMode('reconnecting');
+    const delay = Math.min(10, 2 ** Math.min(this.retry, 4)) * 1000;
+    this.retry++;
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.open().catch(() => this.onDisconnected()), delay);
+  },
+
+  disconnect() {
+    this.user = true; clearTimeout(this.timer);
+    if (this.device && this.device.gatt.connected) this.device.gatt.disconnect();
+    else setMode('idle');
+  },
+
+  write(bytes) {
+    const c = this.chars.ctrl;
+    if (!c) return Promise.reject(new Error('chưa kết nối'));
+    const buf = new Uint8Array(bytes);
+    this.q = this.q.catch(() => {}).then(() => c.writeValueWithResponse ? c.writeValueWithResponse(buf) : c.writeValue(buf));
+    return this.q;
+  },
+};
+
+function sendCmd(bytes, okMsg) {
+  const p = S.mode === 'demo' ? demo.write(bytes) : link.write(bytes);
+  return p.then(() => okMsg && toast(okMsg)).catch(e => toast('Gửi lệnh lỗi: ' + (e && e.message || e)));
+}
+
+// =====================================================================================
+//  Nhận dữ liệu
+// =====================================================================================
+const onVitals = e => handleVitals(e.target.value);
+const onAct    = e => handleAct(e.target.value);
+const onWave   = e => handleWave(e.target.value);
+const onInfo   = e => handleInfo(e.target.value);
+
+function handleVitals(dv) {
+  const v = decVitals(dv); if (!v) return;
+  S.v = v; S.vAt = Date.now();
+  S.hist.push({ t: S.vAt, hr: v.hrValid ? v.hr : null, spo2: v.spo2Valid ? v.spo2 : null });
+  if (S.hist.length > HIST_MAX) S.hist.splice(0, S.hist.length - HIST_MAX);
+  renderHero(); renderSignal(); renderTrends();
+}
+function handleAct(dv) {
+  const a = decAct(dv); if (!a) return;
+  S.a = a; renderActivity();
+  if (S.recOn && S.v) record();
+}
+function handleInfo(dv) {
+  const i = decInfo(dv); if (!i) return;
+  S.info = i; S.infoAt = Date.now(); renderWatch();
+}
+function handleWave(dv) {
+  const w = decWave(dv); if (!w) return;
+  S.wavePkts++;
+  if (S.waveSeq >= 0 && w.seq !== ((S.waveSeq + 1) & 255)) { S.waveLost += (w.seq - S.waveSeq - 1 + 256) & 255; wave.gap(); }
+  S.waveSeq = w.seq;
+  wave.state = w.state;
+  const mask = (S.v && S.v.running) ? 0 : w.mask;          // khi chạy, đỉnh sóng lẫn nhiễu tay -> không đánh dấu nhịp
+  for (let k = 0; k < w.s.length; k++) wave.push(w.state ? w.s[k] : NaN, (mask >> k) & 1);
+  updateWaveOverlay();
+}
+
+// =====================================================================================
+//  Hiển thị
+// =====================================================================================
+const ICON = {
+  good: '<svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="var(--good)"/><path d="M5.8 10.3l2.7 2.7 5.7-5.8" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  warn: '<svg viewBox="0 0 20 20"><path d="M10 1.8l8.6 15.4H1.4z" fill="var(--warn)"/><path d="M10 7.5v4.3M10 14.2v.3" stroke="#1a1a19" stroke-width="2" stroke-linecap="round"/></svg>',
+  info: '<svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="none" stroke="var(--muted)" stroke-width="2"/><path d="M10 9v5M10 6.2v.3" stroke="var(--muted)" stroke-width="2" stroke-linecap="round"/></svg>',
+  run: '<svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="var(--accent)"/><path d="M6 13.5l2.5-3 2.2 1.8L14 7" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+};
+// Cùng logic với oled_status() trên đồng hồ
+function statusOf(v) {
+  if (!v) return ['info', S.mode === 'reconnecting' ? 'Đang chờ đồng hồ…' : 'Chưa kết nối đồng hồ'];
+  if (v.state === 0) return ['info', 'Đặt ngón tay lên cảm biến'];
+  if (v.state === 1) return ['info', 'Đang ổn định tín hiệu…'];
+  if (v.running) return v.hrValid ? ['run', 'Đang chạy bộ'] : ['run', 'Đang chạy bộ – đang bắt nhịp…'];
+  const f = v.hrFlags | (v.spo2Flags & ~0x0800);
+  if (f === 0) return ['good', 'Đang nghỉ – tín hiệu tốt'];
+  if (f & 0x0004) return ['warn', 'Ấn nhẹ tay hơn'];
+  if (f & (0x0010 | 0x0020 | 0x1000)) return ['warn', 'Giữ yên tay'];
+  if (f & (0x0008 | 0x0100 | 0x0400 | 0x0040 | 0x0080 | 0x4000)) return ['warn', 'Chỉnh lại vị trí cảm biến'];
+  return ['info', 'Đang đo…'];
+}
+const fmt = (x, d = 0) => (x == null || !isFinite(x)) ? '—' : x.toLocaleString('vi-VN', { minimumFractionDigits: d, maximumFractionDigits: d });
+
+const NA = '<span class="na">--</span>';
+function renderHero() {
+  const v = S.v;
+  const [tone, text] = statusOf(v);
+  $('stIcon').innerHTML = ICON[tone]; $('stText').textContent = text;
+  const hrOk = v && v.state === 2 && v.hrValid, spOk = v && v.state === 2 && v.spo2Valid;
+  $('hrVal').innerHTML = (hrOk ? Math.round(v.hr) : NA) + '<small>bpm</small>';
+  $('spVal').innerHTML = (spOk ? Math.round(v.spo2) : NA) + '<small>%</small>';
+  $('hrNote').textContent = hrOk ? (v.hrMotion ? 'theo phổ PPG + gia tốc' : 'theo đỉnh sóng PPG') : '';
+  $('spNote').textContent = (v && v.state === 2 && v.pi > 0) ? 'PI ' + fmt(v.pi * 100, 2) + ' %' : '';
+}
+function chipsHtml(flags) {
+  if (!flags) return '<span class="chip ok">Tốt</span>';
+  return SQI.filter(([b]) => flags & b).map(([b, t]) => `<span class="chip bad" title="${SQI_KEY[b]}">${t}</span>`).join('');
+}
+function renderSignal() {
+  const v = S.v; if (!v) return;
+  const m = v.state === 2;
+  $('kPi').textContent = m ? fmt(v.pi * 100, 2) + ' %' : '—';
+  $('kR').textContent = m && v.R > 0 ? fmt(v.R, 3) : '—';
+  $('kAcc').textContent = fmt(v.acc, 2) + ' m/s²';
+  $('kLost').textContent = fmt(v.lost);
+  $('kPkt').textContent = fmt(S.wavePkts) + ' / ' + fmt(S.waveLost);
+  $('hrChips').innerHTML = chipsHtml(v.hrFlags);
+  $('spChips').innerHTML = chipsHtml(v.spo2Flags);
+  $('sigSummary').textContent = (v.hrFlags | v.spo2Flags) ? '' : '· tốt';
+}
+function renderActivity() {
+  const a = S.a; if (!a) return;
+  $('steps').textContent = fmt(a.steps);
+  $('dist').innerHTML = fmt(a.distM / 1000, 2) + '<small>km</small>';
+  $('cad').innerHTML = (a.cad > 0 ? fmt(a.cad) : '—') + '<small>bước/phút</small>';
+  $('kcal').innerHTML = fmt(a.kcal) + '<small>kcal</small>';
+  $('active').innerHTML = fmt(a.active, 1) + '<small>kcal</small>';
+  $('kpm').innerHTML = fmt(a.kpm, 2) + '<small>kcal/phút</small>';
+  $('src').textContent = KCAL_SRC[a.src] || '—';
+  $('walkState').textContent = a.walking ? 'đang đi / chạy' : '';
+}
+function fmtUptime(s) {
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  return h ? `${h} giờ ${m} phút` : m ? `${m} phút` : `${s} giây`;
+}
+function renderWatch() {
+  const i = S.info; if (!i) return;
+  if (i.clock && i.epoch) {
+    const wNow = i.epoch + (Date.now() - S.infoAt) / 1000, drift = Math.round(wNow - Date.now() / 1000);
+    const d = new Date(wNow * 1000), z = n => String(n).padStart(2, '0');
+    const t = `${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())} ${z(d.getDate())}/${z(d.getMonth() + 1)}`;
+    $('wTime').textContent = t + (Math.abs(drift) >= 2 ? ` · lệch ${drift > 0 ? '+' : ''}${fmt(drift)} s` : '');
+  } else $('wTime').textContent = 'chưa có giờ';
+  $('wHw').textContent = (i.bno ? 'BNO055 ✓' : 'BNO055 ✗') + ' · ' + (i.oled ? 'OLED ✓' : 'OLED ✗');
+  $('wUp').textContent = fmtUptime(i.uptime) + ' · TEST_STEP ' + i.step;
+  if (!S.profileDirty) {
+    $('pAge').value = i.age; $('pH').value = i.height; $('pW').value = i.weight; $('pSex').value = i.male ? '1' : '0';
+  }
+}
+// Dữ liệu cũ quá 3 s (đồng hồ treo / mất sóng): làm mờ số
+setInterval(() => {
+  const stale = S.v && Date.now() - S.vAt > 3000;
+  $('hero').classList.toggle('stale', !!stale);
+  if (S.mode === 'connected' && S.info) renderWatch();
+}, 1000);
+
+// =====================================================================================
+//  Canvas helpers
+// =====================================================================================
+let C = {};
+function readColors() {
+  const cs = getComputedStyle(document.documentElement), g = n => cs.getPropertyValue(n).trim();
+  C = { hr: g('--hr'), spo2: g('--spo2'), grid: g('--grid'), text2: g('--text-2'), muted: g('--muted'), surface: g('--surface') };
+}
+function fit(cv) {
+  const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w: r.width, h: r.height };
+}
+
+// ---------- Sóng PPG: phát lại đều 25 Hz (gói đến theo cụm ~3 lần/s) ----------
+const wave = {
+  N: 200, buf: new Float32Array(200).fill(NaN), beat: new Uint8Array(200), head: 0,
+  q: [], acc: 0, last: 0, lo: -1, hi: 1, state: 0,
+  push(v, b) { this.q.push([v, b]); if (this.q.length > 100) this.q.splice(0, this.q.length - 100); },
+  gap() { this.q.push([NaN, 0]); },
+  clear() { this.buf.fill(NaN); this.beat.fill(0); this.q = []; },
+  step(ts) {
+    const dt = this.last ? Math.min(ts - this.last, 200) : 0; this.last = ts;
+    const n = this.q.length;
+    const speed = n > 20 ? 1.3 : n < 4 ? 0.85 : 1;          // giữ độ trễ ~0.3–0.8 s, không giật
+    this.acc += dt * 25 / 1000 * speed;
+    while (this.acc >= 1 && this.q.length) {
+      const [v, b] = this.q.shift(); this.acc -= 1;
+      this.buf[this.head] = v; this.beat[this.head] = b; this.head = (this.head + 1) % this.N;
+      if (b) pulseHeart();
+    }
+    if (!this.q.length) this.acc = Math.min(this.acc, 1);
+  },
+  draw() {
+    const { ctx, w, h } = fit($('wave'));
+    ctx.clearRect(0, 0, w, h);
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < this.N; i++) { const v = this.buf[i]; if (v === v) { if (v < lo) lo = v; if (v > hi) hi = v; } }
+    if (lo < hi) {                                         // thang đo trôi mượt để không nhảy
+      const pad = (hi - lo) * 0.12 + 1;
+      this.lo += (lo - pad - this.lo) * 0.08; this.hi += (hi + pad - this.hi) * 0.08;
+    }
+    const y = v => h - 6 - (v - this.lo) / Math.max(1e-6, this.hi - this.lo) * (h - 12);
+    ctx.strokeStyle = C.grid; ctx.lineWidth = 1; ctx.beginPath();
+    for (const f of [0.25, 0.5, 0.75]) { ctx.moveTo(0, Math.round(h * f) + .5); ctx.lineTo(w, Math.round(h * f) + .5); }
+    ctx.stroke();
+    ctx.strokeStyle = C.hr; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.beginPath();
+    let pen = false;
+    for (let k = 0; k < this.N; k++) {
+      const v = this.buf[(this.head + k) % this.N], x = k / (this.N - 1) * w;
+      if (v !== v) { pen = false; continue; }
+      pen ? ctx.lineTo(x, y(v)) : ctx.moveTo(x, y(v)); pen = true;
+    }
+    ctx.stroke();
+    for (let k = 0; k < this.N; k++) {                     // dấu nhịp tim: chấm 8 px viền màu nền
+      const i = (this.head + k) % this.N; if (!this.beat[i] || this.buf[i] !== this.buf[i]) continue;
+      const x = k / (this.N - 1) * w, yy = y(this.buf[i]);
+      ctx.beginPath(); ctx.arc(x, yy, 5, 0, 7); ctx.fillStyle = C.surface; ctx.fill();
+      ctx.beginPath(); ctx.arc(x, yy, 4, 0, 7); ctx.fillStyle = C.hr; ctx.fill();
+    }
+  },
+};
+function pulseHeart() {
+  const h = $('heartIcon'); h.classList.remove('beat'); void h.getBoundingClientRect(); h.classList.add('beat');
+}
+function updateWaveOverlay() {
+  const o = $('waveOverlay'), live = S.mode === 'connected' || S.mode === 'demo';
+  let t = '';
+  if (!live) t = 'Kết nối đồng hồ để xem sóng mạch';
+  else if (wave.state === 0) t = 'Đặt ngón tay lên cảm biến';
+  o.textContent = t; o.hidden = !t;
+}
+function frame(ts) {
+  if (!document.hidden) { wave.step(ts); wave.draw(); }
+  requestAnimationFrame(frame);
+}
+
+// ---------- Biểu đồ xu hướng (1 trục, 1 chuỗi mỗi biểu đồ) ----------
+const hover = { hr: null, spo2: null };
+function niceStep(span, target) {
+  const raw = span / target, p = 10 ** Math.floor(Math.log10(raw)), m = raw / p;
+  return (m < 1.5 ? 1 : m < 3 ? 2 : m < 7 ? 5 : 10) * p;
+}
+function drawTrend(cv, key, color, minSpan, clampMax) {
+  const { ctx, w, h } = fit(cv);
+  ctx.clearRect(0, 0, w, h);
+  const now = Date.now(), t0 = now - S.range * 1000;
+  const pts = S.hist.filter(p => p.t >= t0);
+  const vals = pts.map(p => p[key]).filter(x => x != null);
+  const empty = cv.parentElement.querySelector('.overlay');
+  empty.hidden = vals.length > 0;
+  const L = 34, R = 10, T = 8, B = 20, pw = w - L - R, ph = h - T - B;
+  let lo = vals.length ? Math.min(...vals) : 60, hi = vals.length ? Math.max(...vals) : 100;
+  if (hi - lo < minSpan) { const c = (hi + lo) / 2; lo = c - minSpan / 2; hi = c + minSpan / 2; }
+  const st = niceStep(hi - lo, 3);
+  lo = Math.floor(lo / st) * st; hi = Math.ceil(hi / st) * st;
+  if (clampMax && hi > clampMax) { hi = clampMax; lo = Math.min(lo, hi - st); }
+  const X = t => L + (t - t0) / (S.range * 1000) * pw, Y = v => T + (hi - v) / (hi - lo) * ph;
+  // lưới + nhãn trục (mờ)
+  ctx.font = '11px system-ui, -apple-system, Roboto, sans-serif'; ctx.textBaseline = 'middle'; ctx.textAlign = 'right';
+  ctx.strokeStyle = C.grid; ctx.lineWidth = 1; ctx.fillStyle = C.muted;
+  for (let v = lo; v <= hi + 1e-9; v += st) {
+    const yy = Math.round(Y(v)) + .5;
+    ctx.beginPath(); ctx.moveTo(L, yy); ctx.lineTo(w - R, yy); ctx.stroke();
+    ctx.fillText(fmt(v), L - 6, yy);
+  }
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  const mins = S.range / 60;
+  [[t0, `-${mins} phút`], [t0 + S.range * 500, `-${mins / 2} phút`], [now, 'bây giờ']].forEach(([t, s], i) => {
+    ctx.textAlign = i === 0 ? 'left' : i === 2 ? 'right' : 'center';
+    ctx.fillText(s, i === 0 ? L : i === 2 ? w - R : X(t), h - 4);
+  });
+  // đường 2 px, đứt đoạn khi không hợp lệ hoặc mất dữ liệu > 2.5 s
+  ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.beginPath();
+  let prev = null;
+  for (const p of pts) {
+    const v = p[key];
+    if (v == null) { prev = null; continue; }
+    const x = X(p.t), yy = Y(Math.min(hi, Math.max(lo, v)));
+    if (prev && p.t - prev.t <= 2500) ctx.lineTo(x, yy); else { ctx.moveTo(x, yy); ctx.lineTo(x + 0.01, yy); }
+    prev = p;
+  }
+  ctx.stroke();
+  // điểm mới nhất / điểm đang chạm
+  const hp = hover[key];
+  const mark = hp || [...pts].reverse().find(p => p[key] != null && now - p.t < 3000);
+  if (hp) { const x = Math.round(X(hp.t)) + .5; ctx.strokeStyle = C.muted; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, T); ctx.lineTo(x, T + ph); ctx.stroke(); }
+  if (mark && mark[key] != null) {
+    const x = X(mark.t), yy = Y(Math.min(hi, Math.max(lo, mark[key])));
+    ctx.beginPath(); ctx.arc(x, yy, 6, 0, 7); ctx.fillStyle = C.surface; ctx.fill();
+    ctx.beginPath(); ctx.arc(x, yy, 4, 0, 7); ctx.fillStyle = color; ctx.fill();
+  }
+  cv._map = { X, t0, L, pw };
+}
+function renderTrends() {
+  drawTrend($('hrChart'), 'hr', C.hr, 20, 0);
+  drawTrend($('spChart'), 'spo2', C.spo2, 6, 100);
+}
+// Chạm / di chuột: đường dọc + giá trị
+document.querySelectorAll('.chart[data-key]').forEach(box => {
+  const key = box.dataset.key, cv = box.querySelector('canvas'), tip = box.querySelector('.tip');
+  const unit = key === 'hr' ? ' bpm' : ' %';
+  const move = e => {
+    const m = cv._map; if (!m) return;
+    const r = cv.getBoundingClientRect(), x = e.clientX - r.left;
+    const t = m.t0 + (x - m.L) / m.pw * S.range * 1000;
+    let best = null, bd = Infinity;
+    for (const p of S.hist) { const d = Math.abs(p.t - t); if (d < bd) { bd = d; best = p; } }
+    if (!best || bd > 5000) { leave(); return; }
+    hover[key] = best;
+    const v = best[key];
+    tip.textContent = new Date(best.t).toLocaleTimeString('vi-VN') + ' · ' + (v == null ? 'không hợp lệ' : fmt(v) + unit);
+    tip.style.display = 'block';
+    tip.style.left = Math.min(r.width - tip.offsetWidth / 2 - 2, Math.max(tip.offsetWidth / 2 + 2, m.X(best.t))) + 'px';
+    renderTrends();
+  };
+  const leave = () => { hover[key] = null; tip.style.display = 'none'; renderTrends(); };
+  cv.addEventListener('pointermove', move); cv.addEventListener('pointerdown', move);
+  cv.addEventListener('pointerleave', leave); cv.addEventListener('pointercancel', leave);
+});
+document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => {
+  S.range = +b.dataset.range;
+  document.querySelectorAll('.seg button').forEach(x => x.setAttribute('aria-pressed', x === b ? 'true' : 'false'));
+  renderTrends();
+}));
+
+// =====================================================================================
+//  Ghi dữ liệu -> CSV
+// =====================================================================================
+const flagNames = f => Object.keys(SQI_KEY).filter(b => f & b).map(b => SQI_KEY[b]).join('|') || 'OK';
+function record() {
+  const v = S.v, a = S.a, ref = $('refSpo2').value;
+  if (!S.rec.length) S.recStart = Date.now();
+  S.rec.push([new Date().toLocaleString('sv-SE').replace(' ', 'T'), Date.now(), v.state, +v.hrValid, v.hr, +v.spo2Valid, v.spo2,
+    (v.pi * 100).toFixed(3), v.R.toFixed(3), flagNames(v.hrFlags), flagNames(v.spo2Flags), v.acc, +v.running, +v.hrMotion,
+    a.steps, a.distM, a.kcal, a.active, a.kpm, a.cad, a.src, ref]);
+  renderRec();
+}
+function renderRec() {
+  const n = S.rec.length, sec = n ? Math.round((Date.now() - S.recStart) / 1000) : 0;
+  $('recInfo').textContent = n ? `${fmt(n)} dòng · ${Math.floor(sec / 60)} phút ${sec % 60} giây` :
+    'Mỗi giây 1 dòng: HR, SpO₂, R, PI, cờ chất lượng, bước, calo. Tải về dạng CSV mở bằng Excel / Google Sheets.';
+  $('btnCsv').disabled = $('btnClear').disabled = !n;
+  $('recCard').classList.toggle('recording', S.recOn);
+}
+$('recOn').addEventListener('change', e => { S.recOn = e.target.checked; renderRec(); });
+$('btnClear').addEventListener('click', () => { S.rec = []; renderRec(); });
+$('btnCsv').addEventListener('click', () => {
+  const head = 'thoi_gian,unix_ms,trang_thai,hr_hop_le,hr_bpm,spo2_hop_le,spo2_pct,pi_pct,R,co_hr,co_spo2,chuyen_dong_ms2,dang_chay,hr_tu_pho,buoc,quang_duong_m,kcal,kcal_van_dong,kcal_phut,nhip_buoc,nguon_calo,spo2_tham_chieu';
+  const csv = '﻿' + head + '\n' + S.rec.map(r => r.join(',')).join('\n') + '\n';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = 'hrwatch_' + new Date().toLocaleString('sv-SE').replace(/[: ]/g, '-').slice(0, 16) + '.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+});
+
+// =====================================================================================
+//  Lệnh xuống đồng hồ
+// =====================================================================================
+$('btnTime').addEventListener('click', () => sendCmd(cmdTime(), 'Đã đồng bộ giờ'));
+let resetArm = 0;
+$('btnReset').addEventListener('click', () => {
+  const b = $('btnReset');
+  if (Date.now() - resetArm > 3000) { resetArm = Date.now(); b.textContent = 'Bấm lần nữa để xác nhận'; setTimeout(() => b.textContent = 'Đặt lại bước và calo', 3000); return; }
+  resetArm = 0; b.textContent = 'Đặt lại bước và calo';
+  sendCmd(cmdReset(), 'Đã đặt lại bước và calo');
+});
+['pAge', 'pH', 'pW', 'pSex'].forEach(id => $(id).addEventListener('input', () => S.profileDirty = true));
+$('profile').addEventListener('submit', e => {
+  e.preventDefault();
+  const age = +$('pAge').value, h = +$('pH').value, w = +$('pW').value, male = $('pSex').value === '1';
+  if (!(age >= 10 && age <= 99 && h >= 100 && h <= 220 && w >= 25 && w <= 200)) { toast('Tuổi 10–99, cao 100–220 cm, nặng 25–200 kg'); return; }
+  sendCmd(cmdProfile(Math.round(age), Math.round(h), Math.round(w), male), 'Đã lưu vào đồng hồ').then(() => S.profileDirty = false);
+});
+
+// ---------- giữ màn hình sáng ----------
+const wake = {
+  lock: null,
+  async update() {
+    const want = $('wakeOn').checked && !document.hidden && (S.mode === 'connected' || S.mode === 'demo' || S.mode === 'reconnecting');
+    try {
+      if (want && !this.lock && navigator.wakeLock) { this.lock = await navigator.wakeLock.request('screen'); this.lock.addEventListener('release', () => this.lock = null); }
+      if (!want && this.lock) { await this.lock.release(); this.lock = null; }
+    } catch (e) { /* trình duyệt không hỗ trợ */ }
+  },
+};
+$('wakeOn').addEventListener('change', () => { if ($('wakeOn').checked && !navigator.wakeLock) toast('Trình duyệt này không hỗ trợ giữ màn hình sáng'); wake.update(); });
+document.addEventListener('visibilitychange', () => wake.update());
+
+// =====================================================================================
+//  Chế độ demo: sinh gói giống hệt đồng hồ, đi qua cùng bộ giải mã
+// =====================================================================================
+const demo = {
+  on: false, t: 0, timers: [], seqV: 0, seqW: 0, phase: 0, hr: 72, steps: 0, kcal: 0, active: 0, prof: { age: 25, h: 170, w: 65, male: 1 }, t0: 0,
+  dv(bytes) { return new DataView(new Uint8Array(bytes).buffer); },
+  start() {
+    this.on = true; this.t0 = Date.now(); this.t = 0; S.waveSeq = -1; wave.clear();
+    $('devName').textContent = 'demo';
+    setMode('demo', 'Demo – dữ liệu giả');
+    this.sendInfo();
+    let sampleIdx = 0;
+    this.timers.push(setInterval(() => {                    // 25 Hz, 8 mẫu/gói
+      const st = this.state(), p = [this.seqW++ & 255, st, 0, 0];
+      for (let k = 0; k < 8; k++) {
+        const dt = 1 / 25, prev = this.phase;
+        this.phase += dt * this.hr / 60;
+        const ph = this.phase % 1;
+        const v = 420 * Math.exp(-((ph - 0.2) ** 2) / 0.016) + 120 * Math.exp(-((ph - 0.52) ** 2) / 0.012) - 150 + 25 * Math.sin(sampleIdx++ / 40);
+        if (st === 2 && (prev + 0.8) % 1 > (this.phase + 0.8) % 1) p[2] |= 1 << k;   // nhịp ở đỉnh tâm thu
+        const x = st === 0 ? 0 : Math.round(v * (st === 1 ? 0.6 : 1));
+        p.push(x & 255, (x >> 8) & 255);
+      }
+      handleWave(this.dv(p));
+    }, 320));
+    this.timers.push(setInterval(() => this.tick(), 1000));
+  },
+  state() { return this.t < 3 ? 0 : this.t < 5 ? 1 : 2; },
+  tick() {
+    this.t++;
+    const st = this.state(), run = this.t % 120 > 80;
+    this.hr = run ? 128 + 8 * Math.sin(this.t / 9) : 72 + 4 * Math.sin(this.t / 23) + (Math.random() - .5) * 2;
+    const meas = st === 2 && this.t > 9, hrF = st === 0 ? 1 : meas ? 0 : 2, spF = st === 0 ? 1 : meas && this.t > 12 && !run ? 0 : run ? 0x10 : 2;
+    const spo2 = 97.2 + Math.sin(this.t / 31), R = (110 - spo2) / 25;
+    const v = [this.seqV++ & 255, st, (hrF ? 0 : 1) | (spF ? 0 : 2) | (run ? 4 : 0) | (run && !hrF ? 8 : 0)];
+    const p16 = x => { x = Math.max(0, Math.min(65535, Math.round(x))); v.push(x & 255, x >> 8); };
+    p16(this.hr * 10); p16(spo2 * 10); p16(st === 2 ? 72 : 0); p16(hrF); p16(spF); p16(st === 2 ? R * 1000 : 0); p16(run ? 420 : 15); p16(0); v.push(0);
+    handleVitals(this.dv(v));
+    if (run) this.steps += 2 + (this.t & 1); else if (this.t % 7 === 0) this.steps += 1;
+    const kpm = run ? 9.5 : 1.15; this.kcal += kpm / 60; this.active += (kpm - 1.1) / 60;
+    const a = []; const p32 = x => a.push(x & 255, (x >>> 8) & 255, (x >>> 16) & 255, x >>> 24); const q16 = x => { x = Math.max(0, Math.min(65535, Math.round(x))); a.push(x & 255, x >> 8); };
+    p32(this.steps); p32(Math.round(this.steps * (run ? 1.02 : 0.7))); q16(this.kcal); q16(this.active * 10); q16(kpm * 100); q16(run ? 165 * 10 : 0); a.push(run ? 2 : 0, run ? 1 : 0, 0, 0);
+    handleAct(this.dv(a));
+    if (this.t % 5 === 0) this.sendInfo();
+  },
+  sendInfo() {
+    const e = Math.floor(Date.now() / 1000), up = Math.floor((Date.now() - this.t0) / 1000) + 3600, P = this.prof;
+    handleInfo(this.dv([1, P.age, P.h & 255, P.h >> 8, P.w & 255, P.w >> 8, P.male, 0b0111, e & 255, (e >>> 8) & 255, (e >>> 16) & 255, e >>> 24, up & 255, (up >>> 8) & 255, (up >>> 16) & 255, up >>> 24, 7]));
+  },
+  write(b) {
+    if (b[0] === 2) this.prof = { age: b[1], h: b[2] | b[3] << 8, w: b[4] | b[5] << 8, male: b[6] };
+    if (b[0] === 3) { this.steps = 0; this.kcal = 0; this.active = 0; }
+    this.sendInfo();
+    return Promise.resolve();
+  },
+  stop() { this.timers.forEach(clearInterval); this.timers = []; this.on = false; wave.clear(); setMode('idle'); $('devName').textContent = ''; },
+};
+$('demoOn').addEventListener('change', e => {
+  if (e.target.checked) { if (S.mode !== 'idle') link.disconnect(); S.hist = []; demo.start(); }
+  else demo.stop();
+});
+
+// =====================================================================================
+//  Khởi động
+// =====================================================================================
+$('btnConnect').addEventListener('click', async () => {
+  if (S.mode === 'demo') { $('demoOn').checked = false; demo.stop(); return; }
+  if (S.mode !== 'idle') { link.disconnect(); return; }
+  if (!navigator.bluetooth) { showNoBle(true); return; }
+  try { await link.choose(); }
+  catch (e) {
+    if (e && e.name === 'NotFoundError') { setMode('idle'); return; }    // người dùng đóng hộp chọn
+    setMode('idle');
+    toast('Không kết nối được: ' + (e && e.message || e), 4000);
+  }
+});
+function showNoBle(force) {
+  const b = $('noBle'), ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+  let html = '';
+  if (location.protocol === 'http:' && !/^(localhost|127\.)/.test(location.hostname))
+    html = '<b>Cần mở trang bằng https://</b>Web Bluetooth chỉ chạy trên trang an toàn (GitHub Pages có sẵn https).';
+  else if (!navigator.bluetooth)
+    html = ios ? '<b>Safari / Chrome trên iPhone không hỗ trợ Bluetooth cho web</b>Cài app <a href="https://apps.apple.com/app/id1492822055" target="_blank" rel="noopener">Bluefy – Web BLE Browser</a> rồi mở lại trang này trong Bluefy.'
+               : '<b>Trình duyệt này không hỗ trợ Web Bluetooth</b>Hãy mở trang bằng Chrome (Android, Windows, macOS). Có thể bật Chế độ demo ở dưới để xem thử.';
+  b.innerHTML = html; b.hidden = !html;
+  if (force && html) b.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+function onTheme() { readColors(); renderTrends(); }
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', onTheme);
+addEventListener('resize', () => renderTrends());
+readColors(); showNoBle(false); setMode('idle'); renderHero(); renderTrends(); renderRec();
+requestAnimationFrame(frame);
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>

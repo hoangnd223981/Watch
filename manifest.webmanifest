@@ -1,0 +1,17 @@
+{
+  "name": "HR-Watch",
+  "short_name": "HR-Watch",
+  "description": "Theo dõi nhịp tim, SpO2, số bước và calo từ đồng hồ ESP32 qua Bluetooth",
+  "lang": "vi",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#111110",
+  "theme_color": "#111110",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
