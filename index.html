@@ -10,6 +10,26 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
+<script>
+// Hiện lỗi JavaScript ngay trên trang (để chụp màn hình gửi lại nếu app không chạy trên một trình duyệt nào đó)
+(function () {
+  var pending = [];
+  function show(msg) {
+    var box = document.getElementById('hrwJsErr');
+    if (!box) {
+      if (!document.body) { pending.push(msg); return; }
+      box = document.createElement('div'); box.id = 'hrwJsErr';
+      box.style.cssText = 'margin:12px 16px;padding:12px 14px;border-radius:12px;background:#fde8e8;color:#7a1414;font:13px/1.45 ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-word;border:1px solid #f3b4b4';
+      document.body.insertBefore(box, document.body.firstChild);
+      box.textContent = 'App gặp lỗi — chụp màn hình phần này gửi lại:';
+    }
+    box.textContent += '\n• ' + msg;
+  }
+  document.addEventListener('DOMContentLoaded', function () { var m = pending; pending = []; m.forEach(show); });
+  window.addEventListener('error', function (e) { show((e.message || 'Error') + (e.lineno ? ' (dòng ' + e.lineno + ':' + e.colno + ')' : '')); });
+  window.addEventListener('unhandledrejection', function (e) { var r = e.reason; show('Promise: ' + (r && r.name ? r.name + ': ' + r.message : r)); });
+})();
+</script>
 <style>
 :root {
   color-scheme: light;
@@ -328,6 +348,9 @@ input[type="number"], select {
 <div class="toast" id="toast" role="status"></div>
 
 <script>
+// Toàn bộ code nằm trong 1 hàm riêng: không khai báo tên toàn cục nào, nên không thể trùng tên với
+// script mà trình duyệt Bluetooth (Bluefy...) tự chèn vào trang — trùng 1 tên là cả app không chạy.
+(function () {
 'use strict';
 // =====================================================================================
 //  Giao thức BLE — khớp với Phone.ino (mọi gói <= 20 byte, little-endian)
@@ -977,6 +1000,9 @@ log('Trình duyệt: ' + navigator.userAgent);
 log('Web Bluetooth: ' + (navigator.bluetooth ? 'có' : 'KHÔNG') + ' · https: ' + (window.isSecureContext ? 'có' : 'KHÔNG'));
 requestAnimationFrame(frame);
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+
+window.HRW = { S, LOG, link, demo };                       // để gỡ lỗi / kiểm thử
+})();
 </script>
 </body>
 </html>
